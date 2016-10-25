@@ -106,6 +106,20 @@ CMD_HANDLER_FUNC(taskListHandler)
     return true;
 }
 
+CMD_HANDLER_FUNC(orientationHandler)
+{
+
+			scheduler_task *task_1 = scheduler_task::getTaskPtrByName("task_1");
+
+			if(cmdParams == "on"){
+				task_1->resume();
+			}else{
+				task_1->suspend();
+			}
+
+	return true;
+}
+
 CMD_HANDLER_FUNC(memInfoHandler)
 {
 #if 0 /* This was for memory test */

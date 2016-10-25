@@ -25,7 +25,10 @@
  */
 #include "tasks.hpp"
 #include "examples/examples.hpp"
-
+#include "scheduler_task.hpp"
+#include <io.hpp>
+#include <stdio.h>
+#include <queue.h>
 /**
  * The main() creates tasks or "threads".  See the documentation of scheduler_task class at scheduler_task.hpp
  * for details.  There is a very simple example towards the beginning of this class's declaration.
@@ -40,6 +43,135 @@
  *        In either case, you should avoid using this bus or interfacing to external components because
  *        there is no semaphore configured for this bus and it should be used exclusively by nordic wireless.
  */
+typedef enum {
+	shared_SensorQueueId,
+} sharedHandleId_t;
+
+typedef enum {
+	invalid,
+	left,
+	right,
+	up,
+	down,
+} orientation_t;
+
+class task_1 : public scheduler_task{
+public:
+	task_1(uint8_t priority) : scheduler_task("task_1", 2000, priority){}
+	bool run(void *p){
+		QueueHandle_t myQueue = xQueueCreate(1, sizeof(orientation_t));
+		addSharedObject(shared_SensorQueueId, myQueue);
+		int x = AS.getX();
+		int y = AS.getY();
+		//int z = AS.getZ();
+
+		orientation_t orientation = invalid;
+		if(x > 300)
+		{
+			//printf("Tilting left\n");
+			orientation = left;
+		}
+		if(x < -300)
+		{
+			//printf("Tilting right\n");
+			orientation = right;
+		}
+		if(y > 300)
+		{
+			//printf("Tilting up\n");
+			orientation = up;
+		}
+		if(y < -300)
+		{
+			//printf("Tilting down\n");
+			orientation = down;
+		}
+		printf("Task 1 is sending %i to queue.\n", orientation);
+		xQueueSend(getSharedObject(shared_SensorQueueId), &orientation, 1000);
+		printf("Task 1 has sent %i to queue.\n", orientation);
+		vTaskDelay(1000);
+		return true;
+	}
+	bool init(void){
+		//empty
+		return true;
+	}
+};
+
+class task_2 : public scheduler_task{
+public:
+	task_2(uint8_t priority) : scheduler_task("task_2", 2000, priority){}
+	bool run(void *p){
+		orientation_t orientation = invalid;
+		QueueHandle_t myQueue = getSharedObject(shared_SensorQueueId);
+		if(xQueueReceive(myQueue, &orientation, 1000))
+		{
+			printf("Task 2 has received %i from queue\n", orientation);
+			if(orientation == left || orientation == right){
+				LPC_GPIO1->FIOSET |= (0xF << 0);
+				//turn on LEDS
+			}
+			else
+			{
+				LPC_GPIO1->FIOCLR |= (0xF << 0);
+				//turn off LEDS
+			}
+		}
+		vTaskDelay(1000);
+		return true;
+	}
+	bool init(void){
+		//sets bits 0-3 to 0 for GPIO functionality of LEDS 0 and 1
+		LPC_PINCON->PINSEL2 &= ~(0xF << 0);
+		//sets bits 8-9 for GPIO functionality of LED 2
+		LPC_PINCON->PINSEL2 &= ~(0x3 << 8);
+		LPC_PINCON->PINSEL2 &= ~(0x3 << 16);
+		//Data direction init section
+		LPC_GPIO1->FIODIR |= (0xF << 0);
+
+
+		return true;
+	}
+};
+
+class producer : public scheduler_task{
+public:
+	producer(uint8_t priority) : scheduler_task("producer", 2000, priority){}
+	bool run(void *p){
+
+		int light[10];
+		for(int i = 0; i < 10; i++){
+			int light[0] = LS.getRawValue();
+			printf("%i\n", light);
+			vTaskDelay(1);
+		}
+
+		int lightAverage = 0;
+		for(int i = 0; i < 10; i++){
+		lightAverage += light[0];
+		}
+		lightAverage = lightAverage/10;
+		return true;
+	}
+	bool init(void){
+		return true;
+	}
+};
+
+class consumer : public scheduler_task{
+public:
+	consumer(uint8_t priority) : scheduler_task("consumer", 2000, priority){}
+	bool run(void *p){
+
+		return true;
+	}
+
+	bool init(void){
+		return true;
+	}
+
+};
+
 int main(void)
 {
     /**
@@ -56,7 +188,11 @@ int main(void)
 
     /* Consumes very little CPU, but need highest priority to handle mesh network ACKs */
     scheduler_add_task(new wirelessTask(PRIORITY_CRITICAL));
-
+	#if 0
+    scheduler_add_task(new task_1(PRIORITY_MEDIUM));
+    scheduler_add_task(new task_2(PRIORITY_MEDIUM));
+	#endif
+    scheduler_add_task(new producer(PRIORITY_MEDIUM));
     /* Change "#if 0" to "#if 1" to run period tasks; @see period_callbacks.cpp */
     #if 0
     scheduler_add_task(new periodicSchedulerTask());
