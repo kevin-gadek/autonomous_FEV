@@ -26,6 +26,10 @@
 #include "tasks.hpp"
 #include "examples/examples.hpp"
 #include "scheduler_task.hpp"
+#include "event_groups.h"
+#include "storage.hpp"
+#include "time.h"
+#include "string.h"
 #include <io.hpp>
 #include <stdio.h>
 #include <queue.h>
@@ -134,42 +138,151 @@ public:
 	}
 };
 
-class producer : public scheduler_task{
+EventGroupHandle_t event_group;
+
+class producer_task: public scheduler_task
+{
 public:
-	producer(uint8_t priority) : scheduler_task("producer", 2000, priority){}
-	bool run(void *p){
+	producer_task(uint8_t priority): scheduler_task("producer", 2048, priority)
+	{
+		puts("Inside Producer Task \n\n");
+		current_average = 0;
+		current_iteration = 1;
+		myqueue = xQueueCreate(5, sizeof(double));
+		addSharedObject(shared_SensorQueueId, myqueue);
+	}
 
-		int light[10];
-		for(int i = 0; i < 10; i++){
-			int light[0] = LS.getRawValue();
-			printf("%i\n", light);
-			vTaskDelay(1);
-		}
+	bool init(void)
+	{
+		return true;
 
-		int lightAverage = 0;
-		for(int i = 0; i < 10; i++){
-		lightAverage += light[0];
+	}
+
+	bool run(void *p)
+	{
+		current_average += LS.getPercentValue();
+		if(current_iteration == 99)
+		{
+			current_iteration = 0;
+			current_average /= 100;
+			xQueueSend(myqueue, &current_average, portMAX_DELAY);
+			current_average = 0;
 		}
-		lightAverage = lightAverage/10;
+		current_iteration++;
+		vTaskDelay(1);
+		xEventGroupSetBits(event_group, 0x2);
 		return true;
 	}
-	bool init(void){
-		return true;
-	}
+private:
+	double current_average; //since in FREERTOS memory is precious and it doesn't say you need to store individual values
+	int current_iteration;
+	QueueHandle_t myqueue;
 };
 
-class consumer : public scheduler_task{
+class consumer_task: public scheduler_task
+{
 public:
-	consumer(uint8_t priority) : scheduler_task("consumer", 2000, priority){}
+	consumer_task(uint8_t priority): scheduler_task("consumer", 2048, priority)
+	{
+		myqueue = getSharedObject(shared_SensorQueueId);
+		numValues = 0;
+		receivedAverage = 0;
+		uptime = 0;
+		puts("Inside Consumer Task \n\n");
+	}
+
+	bool init(void)
+	{
+		return true;
+	}
+
+	bool run(void *p)
+	{
+
+		if(xQueueReceive(myqueue, &receivedAverage, portMAX_DELAY))
+		{
+			uptime = sys_get_uptime_ms();
+			arrayOfTimes[numValues] = uptime;
+			arrayOfAverages[numValues] = receivedAverage;
+			numValues++;
+			if(numValues == 10)
+			{
+				for(int i = 0; i < 10; i++)
+				{
+					size = snprintf(print_buffer, 100, "%i, %f\n", arrayOfTimes[i], arrayOfAverages[i]);
+					Storage::append("1:sensor.txt", &print_buffer, size, 0);
+					vTaskDelay(1000);
+					//printf("Value %i for Time %i, is: %f\n", i, arrayOfTimes[i], arrayOfAverages[i]);
+				}
+				vTaskDelay(1000);
+				//printf("Write to sensor.txt completed\n");
+				numValues = 0; //reset the Buffer
+
+			}
+
+		}
+		xEventGroupSetBits(event_group, 0x4);
+		return true;
+	}
+private:
+	QueueHandle_t myqueue;
+	int numValues;
+	unsigned int size;
+	double receivedAverage;
+	char print_buffer[100];
+	double arrayOfAverages[10];
+	int arrayOfTimes[10];
+
+	uint64_t uptime;
+
+};
+const uint32_t all_task_bits = ((0x2) | (0x4));
+class watchdog_task : public scheduler_task{
+public:
+	watchdog_task(uint8_t priority) : scheduler_task("watchdog_task", 2000, priority){}
 	bool run(void *p){
 
-		return true;
+		//printf("Entered watchdog task, counter: %i\n", watchdog_counter++);
+		//check for 0x6 so 2nd and 3rd bits
+		uint32_t event_bits = xEventGroupWaitBits(event_group, all_task_bits,pdTRUE,pdTRUE, 2000);
+			//printf("xEventGroupWaitBits function called.\n");
+		                        char print[100];
+		                        //counter of bytes that would need to be written to stuck.txt
+		                        int size;
+		                        bool flag = false;
+
+		                        size = snprintf(print, 100, "Tasks that aren't responding: ");
+		                        if(!(event_bits & 0x2))
+		                        {
+		                        	//time_t current_time = time(NULL);
+		                        	printf("Producer task currently suspended\n");
+		                            strncat(print, " Producer", 9);
+		                            size += 10;
+		                            flag = true;
+		                        }
+
+		                        if(!(event_bits & 0x4))
+		                        {
+		                        	//time_t current_time = time(NULL);
+		                        	//printf("Consumer task suspended at time: %li\n", current_time);
+		                            strncat(print, " Consumer", 9);
+		                            size += 10;
+		                            flag = true;
+		                        }
+
+		                        strncat(print, "\n", 1);
+		                        size++;
+		                        if(flag)
+		                        {
+		                            Storage::append("1:stuck.txt", &print, size , 0);
+		                        }
+
+		                        return true;
 	}
 
 	bool init(void){
 		return true;
 	}
-
 };
 
 int main(void)
@@ -184,6 +297,7 @@ int main(void)
      * such that it can save remote control codes to non-volatile memory.  IR remote
      * control codes can be learned by typing the "learn" terminal command.
      */
+
     scheduler_add_task(new terminalTask(PRIORITY_HIGH));
 
     /* Consumes very little CPU, but need highest priority to handle mesh network ACKs */
@@ -192,7 +306,10 @@ int main(void)
     scheduler_add_task(new task_1(PRIORITY_MEDIUM));
     scheduler_add_task(new task_2(PRIORITY_MEDIUM));
 	#endif
-    scheduler_add_task(new producer(PRIORITY_MEDIUM));
+    event_group = xEventGroupCreate();
+    scheduler_add_task(new producer_task(PRIORITY_MEDIUM));
+    scheduler_add_task(new consumer_task(PRIORITY_MEDIUM));
+    scheduler_add_task(new watchdog_task(PRIORITY_HIGH));
     /* Change "#if 0" to "#if 1" to run period tasks; @see period_callbacks.cpp */
     #if 0
     scheduler_add_task(new periodicSchedulerTask());
@@ -262,3 +379,84 @@ int main(void)
     scheduler_start(); ///< This shouldn't return
     return -1;
 }
+
+/*
+QueueHandle_t sensor_queue;
+EventGroupHandle_t event_group;
+
+class producer_task : public scheduler_task{
+public:
+	producer_task(uint8_t priority) : scheduler_task("producer_task", 512*4, priority){}
+	bool run(void *p){
+
+		//queue length: 10 items, item size: sizeof(int)
+		//QueueHandle_t sensor_queue = xQueueCreate(10, sizeof(int));
+		//addSharedObject(shared_SensorQueueId, sensor_queue);
+		int lightAverage = 0;
+		for(int i = 0; i < 100; i++){
+		//add 100 samples into lightAverage
+			lightAverage += LS.getRawValue();
+			//assuming 1 tick is 1 ms
+			vTaskDelay(10);
+		}
+		//average out samples
+		lightAverage = lightAverage/100;
+
+		//printf("Light Average: %i\n", lightAverage);
+		printf("Producer about to send item to queue.\n");
+		xQueueSend(sensor_queue, &lightAverage, 1000);
+		printf("Producer has just sent item to queue.\n");
+		xEventGroupSetBits(event_group, 0x2);
+		return true;
+	}
+	bool init(void){
+		return true;
+	}
+};
+
+class consumer_task : public scheduler_task{
+public:
+	consumer_task(uint8_t priority) : scheduler_task("consumer_task", 512*4, priority){}
+	bool run(void *p){
+		int buffer[10];
+		int light = 0;
+		//store time for each buffer value
+		time_t time_buffer[10];
+		//QueueHandle_t sensor_queue = getSharedObject(shared_SensorQueueId);
+		//this should get 10 samples of the averaged data from producer
+		for(int j = 0; j < 10; j++){
+			//replace with max block time
+			if(xQueueReceive(sensor_queue, &light, portMAX_DELAY) == pdTRUE){
+					printf("Consumer has just received item from queue.\n");
+					//should pull 10 values from queue
+						buffer[j] = light;
+						//assign corresponding time value to time_buffer
+						time_buffer[j] = time(NULL);
+						printf("Inside receive loop, j: %i\n", j);
+						//printf("Light Average (consumer): %li, data: %u\n", time_buffer[j], buffer[j]);
+					}else{
+						printf("Item not received from queue\n");
+					}
+		}
+		//need to format the data into printable statement
+		char print_buffer[100];
+		//need to use Storage::append()
+		for(int k = 0; k < 10; k++){
+			//reformat data buffer and time buffer into print_buffer
+			unsigned int size = snprintf(print_buffer, 100, "%li, %u\n", time_buffer[k], buffer[k]);
+			Storage::append("0:sensor.txt", &print_buffer, size, 0);
+			//printf("Light Average (consumer): %i\n", buffer[i]);
+		}
+		xEventGroupSetBits(event_group, 0x4);
+		//Storage::read("sensor.txt", );
+
+		return true;
+	}
+
+	bool init(void){
+		return true;
+	}
+
+};
+
+*/

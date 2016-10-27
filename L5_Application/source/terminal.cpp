@@ -71,6 +71,8 @@ bool terminalTask::taskEntry()
     CommandProcessor &cp = mCmdProc;
 
     cp.addHandler(orientationHandler, "orientation", "Two options: 'orientation on' or 'orientation off'");
+    cp.addHandler(suspendHandler, "task_suspend", "task_suspend producer or task_suspend consumer'");
+    cp.addHandler(resumeHandler, "task_resume", "task_resume producer or task_resume consumer");
     // System information handlers
     cp.addHandler(taskListHandler, "info",    "Task/CPU Info.  Use 'info 200' to get CPU during 200ms");
     cp.addHandler(memInfoHandler,  "meminfo", "See memory info");

@@ -27,6 +27,11 @@
 
 //Handler for orientation task
 CMD_HANDLER_FUNC(orientationHandler);
+
+//Handler to suspend any task
+CMD_HANDLER_FUNC(suspendHandler);
+//Handler to resume task
+CMD_HANDLER_FUNC(resumeHandler);
 /// Handler for task list & CPU Information
 CMD_HANDLER_FUNC(taskListHandler);
 
