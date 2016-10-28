@@ -211,10 +211,10 @@ public:
 				{
 					size = snprintf(print_buffer, 100, "%i, %f\n", arrayOfTimes[i], arrayOfAverages[i]);
 					Storage::append("1:sensor.txt", &print_buffer, size, 0);
-					vTaskDelay(1000);
+					vTaskDelay(100);
 					//printf("Value %i for Time %i, is: %f\n", i, arrayOfTimes[i], arrayOfAverages[i]);
 				}
-				vTaskDelay(1000);
+				//vTaskDelay(1000);
 				//printf("Write to sensor.txt completed\n");
 				numValues = 0; //reset the Buffer
 
@@ -251,6 +251,8 @@ public:
 		                        int size;
 		                        bool flag = false;
 
+
+
 		                        size = snprintf(print, 100, "Tasks that aren't responding: ");
 		                        if(!(event_bits & 0x2))
 		                        {
@@ -285,6 +287,52 @@ public:
 	}
 };
 
+class cpu_usage_task : public scheduler_task{
+public:
+	cpu_usage_task(uint8_t priority) : scheduler_task("cpu_usage_task", 2000, priority){}
+	bool run(void *p){
+		//runs every 20 seconds
+		vTaskDelayUntil(&current_time, 20000);
+		const char * const taskStatusTbl[] = { "RUN", "RDY", "BLK", "SUS", "DEL" };
+	    const unsigned portBASE_TYPE maxTasks = 16;
+	    TaskStatus_t status[maxTasks];
+	    uint32_t totalRunTime = 0;
+	        uint32_t tasksRunTime = 0;
+	        const unsigned portBASE_TYPE uxArraySize =
+	                uxTaskGetSystemState(&status[0], maxTasks, &totalRunTime);
+
+	        char print_buffer[100];
+	       unsigned int size = snprintf(print_buffer, 100, "\n\n10s     Sta     Pr   Stack    CPU%%          Time\n");
+	        Storage::append("1:cpu.txt", &print_buffer, size, 0);
+
+	        for(unsigned priorityNum = 0; priorityNum < configMAX_PRIORITIES; priorityNum++)
+	            {
+	                /* Print in sorted priority order */
+	                for (unsigned i = 0; i < uxArraySize; i++) {
+	                    TaskStatus_t *e = &status[i];
+	                    if (e->uxBasePriority == priorityNum) {
+	                        tasksRunTime += e->ulRunTimeCounter;
+
+	                        const uint32_t cpuPercent = (0 == totalRunTime) ? 0 : e->ulRunTimeCounter / (totalRunTime/100);
+	                        const uint32_t timeUs = e->ulRunTimeCounter;
+	                        const uint32_t stackInBytes = (4 * e->usStackHighWaterMark);
+
+	                        size = snprintf(print_buffer, 100, "Name: %10s %s %2u %5u %4u %10u us\n", e->pcTaskName, taskStatusTbl[e->eCurrentState], e->uxBasePriority,
+                                    stackInBytes, cpuPercent, timeUs);
+	                        Storage::append("1:cpu.txt", &print_buffer, size, 0);
+	                    }
+	                }
+	            }
+		return true;
+	}
+	bool init(void){
+
+	}
+private:
+	TickType_t current_time = xTaskGetTickCount();
+
+};
+
 int main(void)
 {
     /**
@@ -310,6 +358,7 @@ int main(void)
     scheduler_add_task(new producer_task(PRIORITY_MEDIUM));
     scheduler_add_task(new consumer_task(PRIORITY_MEDIUM));
     scheduler_add_task(new watchdog_task(PRIORITY_HIGH));
+    scheduler_add_task(new cpu_usage_task(PRIORITY_CRITICAL));
     /* Change "#if 0" to "#if 1" to run period tasks; @see period_callbacks.cpp */
     #if 0
     scheduler_add_task(new periodicSchedulerTask());
