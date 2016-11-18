@@ -332,6 +332,57 @@ private:
 	TickType_t current_time = xTaskGetTickCount();
 
 };
+//using P0.26(AD0.3) for test; set PINSEL1->bits 20-21 to 01
+//Only 3 accessible ADC pins on board, need analog mux tied to GPIO sel signal if want to use more
+class ir_task : public scheduler_task{
+public:
+	ir_task(uint8_t priority) : scheduler_task("ir_task", 2000, priority){}
+	bool run(void *p){
+		while(1){
+			//if done flag for channel 3 is set
+					if(LPC_ADC->ADSTAT & (1 << 3)){
+						//12 bits of data
+						char data = LPC_ADC->ADDR3;
+						//puts("Inside data loop\n");
+						printf("Data: %x\n", data);
+						//vTaskDelay(1);
+					}
+		}
+
+		return true;
+	}
+	bool init(void){
+		//set bit 12 of PCONP
+		LPC_SC->PCONP |= (1 << 12);
+		//peripheral clock select
+		LPC_SC->PCLKSEL0 &= ~(3 << 24); //clear
+		LPC_SC->PCLKSEL0 |= (1 << 24); //set to CCLK/1
+
+		//disable pull-up and pull-down resistors
+		LPC_PINCON->PINMODE1 &= ~(3 << 20); //clear
+		LPC_PINCON->PINMODE1 |= (0x2 << 20); //set to 10 to disable pull-up and pull-down
+		//set pin functionality in PINSEL
+		//select P0.26(AD0.3) as 01 functionality or AD0.3
+		LPC_PINCON->PINSEL1 &= ~(3 << 20); //clear
+		LPC_PINCON->PINSEL1 |= (1 << 20); //set to 01
+
+		//disable interrupts on channel 3 for hardware scan mode
+		LPC_ADC->ADINTEN &= ~(1 << 3); //clear bit 3
+		//need to set AD control register
+		//select all 8 AD pins so hardware scan mode works better
+		//burst(bit 16) should be set for hardware scan mode
+		//PDN (bit 21) should be set to enable ADC
+		//START (bits 24-27 must be 0s because BURST bit is set)
+		//0000 0000 0010 0001 0000 0000 1111 1111
+		//select all ad pins 0x2100FF
+		LPC_ADC->ADCR |= ((1 << 3) | (1 << 16) | (1 << 21));
+		LPC_ADC->ADCR &= ~(7 << 24); //clear start bits
+		//LPC_ADC->ADCR = 0x002100FF;
+
+		return true;
+	}
+
+};
 
 int main(void)
 {
@@ -350,17 +401,20 @@ int main(void)
 
     /* Consumes very little CPU, but need highest priority to handle mesh network ACKs */
     scheduler_add_task(new wirelessTask(PRIORITY_CRITICAL));
-	#if 0
-    scheduler_add_task(new task_1(PRIORITY_MEDIUM));
-    scheduler_add_task(new task_2(PRIORITY_MEDIUM));
-	#endif
-    event_group = xEventGroupCreate();
-    scheduler_add_task(new producer_task(PRIORITY_MEDIUM));
-    scheduler_add_task(new consumer_task(PRIORITY_MEDIUM));
-    scheduler_add_task(new watchdog_task(PRIORITY_HIGH));
-    scheduler_add_task(new cpu_usage_task(PRIORITY_CRITICAL));
+//	#if 0
+//    scheduler_add_task(new task_1(PRIORITY_MEDIUM));
+//    scheduler_add_task(new task_2(PRIORITY_MEDIUM));
+//	#endif
+//#if 0
+//    event_group = xEventGroupCreate();
+//    scheduler_add_task(new producer_task(PRIORITY_MEDIUM));
+//    scheduler_add_task(new consumer_task(PRIORITY_MEDIUM));
+//    scheduler_add_task(new watchdog_task(PRIORITY_HIGH));
+//    scheduler_add_task(new cpu_usage_task(PRIORITY_CRITICAL));
+//#endif
+    scheduler_add_task(new ir_task(PRIORITY_MEDIUM));
     /* Change "#if 0" to "#if 1" to run period tasks; @see period_callbacks.cpp */
-    #if 0
+    #if 1
     scheduler_add_task(new periodicSchedulerTask());
     #endif
 
@@ -370,7 +424,6 @@ int main(void)
     /* Your tasks should probably used PRIORITY_MEDIUM or PRIORITY_LOW because you want the terminal
      * task to always be responsive so you can poke around in case something goes wrong.
      */
-
     /**
      * This is a the board demonstration task that can be used to test the board.
      * This also shows you how to send a wireless packets to other boards.
@@ -429,83 +482,3 @@ int main(void)
     return -1;
 }
 
-/*
-QueueHandle_t sensor_queue;
-EventGroupHandle_t event_group;
-
-class producer_task : public scheduler_task{
-public:
-	producer_task(uint8_t priority) : scheduler_task("producer_task", 512*4, priority){}
-	bool run(void *p){
-
-		//queue length: 10 items, item size: sizeof(int)
-		//QueueHandle_t sensor_queue = xQueueCreate(10, sizeof(int));
-		//addSharedObject(shared_SensorQueueId, sensor_queue);
-		int lightAverage = 0;
-		for(int i = 0; i < 100; i++){
-		//add 100 samples into lightAverage
-			lightAverage += LS.getRawValue();
-			//assuming 1 tick is 1 ms
-			vTaskDelay(10);
-		}
-		//average out samples
-		lightAverage = lightAverage/100;
-
-		//printf("Light Average: %i\n", lightAverage);
-		printf("Producer about to send item to queue.\n");
-		xQueueSend(sensor_queue, &lightAverage, 1000);
-		printf("Producer has just sent item to queue.\n");
-		xEventGroupSetBits(event_group, 0x2);
-		return true;
-	}
-	bool init(void){
-		return true;
-	}
-};
-
-class consumer_task : public scheduler_task{
-public:
-	consumer_task(uint8_t priority) : scheduler_task("consumer_task", 512*4, priority){}
-	bool run(void *p){
-		int buffer[10];
-		int light = 0;
-		//store time for each buffer value
-		time_t time_buffer[10];
-		//QueueHandle_t sensor_queue = getSharedObject(shared_SensorQueueId);
-		//this should get 10 samples of the averaged data from producer
-		for(int j = 0; j < 10; j++){
-			//replace with max block time
-			if(xQueueReceive(sensor_queue, &light, portMAX_DELAY) == pdTRUE){
-					printf("Consumer has just received item from queue.\n");
-					//should pull 10 values from queue
-						buffer[j] = light;
-						//assign corresponding time value to time_buffer
-						time_buffer[j] = time(NULL);
-						printf("Inside receive loop, j: %i\n", j);
-						//printf("Light Average (consumer): %li, data: %u\n", time_buffer[j], buffer[j]);
-					}else{
-						printf("Item not received from queue\n");
-					}
-		}
-		//need to format the data into printable statement
-		char print_buffer[100];
-		//need to use Storage::append()
-		for(int k = 0; k < 10; k++){
-			//reformat data buffer and time buffer into print_buffer
-			unsigned int size = snprintf(print_buffer, 100, "%li, %u\n", time_buffer[k], buffer[k]);
-			Storage::append("0:sensor.txt", &print_buffer, size, 0);
-			//printf("Light Average (consumer): %i\n", buffer[i]);
-		}
-		xEventGroupSetBits(event_group, 0x4);
-		//Storage::read("sensor.txt", );
-
-		return true;
-	}
-
-	bool init(void){
-		return true;
-	}
-
-};
-
-*/
