@@ -106,6 +106,54 @@ CMD_HANDLER_FUNC(taskListHandler)
     return true;
 }
 
+CMD_HANDLER_FUNC(orientationHandler)
+{
+
+			scheduler_task *task_1 = scheduler_task::getTaskPtrByName("task_1");
+
+			if(cmdParams == "on"){
+				task_1->resume();
+			}else{
+				task_1->suspend();
+			}
+
+	return true;
+}
+
+CMD_HANDLER_FUNC(suspendHandler)
+{
+	scheduler_task *compute = scheduler_task::getTaskPtrByName(cmdParams());
+
+	    if (compute != NULL)
+	    {
+	    	vTaskSuspend(compute->getTaskHandle());
+	    	time_t current_time = time(NULL);
+	    	printf("Current time: %li\n", current_time);
+	    }
+
+	    return true;
+}
+
+CMD_HANDLER_FUNC(resumeHandler)
+{
+	scheduler_task *compute = scheduler_task::getTaskPtrByName(cmdParams());
+
+	    if (compute != NULL)
+	    {
+	    	vTaskResume(compute->getTaskHandle());
+	    	time_t current_time = time(NULL);
+	    	printf("Current time: %li\n", current_time);
+	    }
+	    else
+	    {
+	        printf("Invalid task.\n");
+	    }
+
+	    return true;
+
+	return true;
+}
+
 CMD_HANDLER_FUNC(memInfoHandler)
 {
 #if 0 /* This was for memory test */
