@@ -25,6 +25,33 @@
  */
 #include "tasks.hpp"
 #include "examples/examples.hpp"
+#include "scheduler_task.hpp"
+#include "event_groups.h"
+#include "storage.hpp"
+#include "lpc_pwm.hpp"
+#include "time.h"
+#include "string.h"
+#include <io.hpp>
+#include <stdio.h>
+#include <queue.h>
+#include "adc0.h"
+
+//class pwm_task : public scheduler_task{
+//public:
+//	pwm_task(uint8_t priority) : scheduler_task("pwm_task", 2000, priority){}
+//	bool init(void){
+
+//		return true;
+//	}
+//
+//	bool run(void *p){
+//
+//		return true;
+//	}
+//
+//
+//};
+
 
 /**
  * The main() creates tasks or "threads".  See the documentation of scheduler_task class at scheduler_task.hpp
@@ -40,6 +67,100 @@
  *        In either case, you should avoid using this bus or interfacing to external components because
  *        there is no semaphore configured for this bus and it should be used exclusively by nordic wireless.
  */
+		//P2.4, 50Hz frequency
+PWM servo(PWM::pwm5, 50);
+int x = 0;
+class pwm_task : public scheduler_task{
+public:
+	pwm_task(uint8_t priority) : scheduler_task("pwm_task", 2000, priority){}
+	bool init(void){
+		//double x = 0;
+
+		return true;
+	}
+
+	bool run(void *p){
+		x = (x + 5)%100;
+		servo.set(x);
+		vTaskDelay(1000);
+		return true;
+	}
+};
+int reading = 0;
+class flame_task : public scheduler_task{
+public:
+	flame_task(uint8_t priority) : scheduler_task("flame_task", 2000, priority){}
+	bool init(void){
+		//double x = 0;
+
+		LPC_PINCON->PINSEL3 |=  (3 << 28);
+		return true;
+	}
+
+	bool run(void *p){
+		while(1){
+			reading = adc0_get_reading(4);
+			printf("ADC Reading: %d\n", reading);
+			vTaskDelay(1000);
+		}
+		return true;
+	}
+};
+
+////using P0.26(AD0.3) for test; set PINSEL1->bits 20-21 to 01
+////Only 3 accessible ADC pins on board, need analog mux tied to GPIO sel signal if want to use more
+//class ir_task : public scheduler_task{
+//public:
+//	ir_task(uint8_t priority) : scheduler_task("ir_task", 2000, priority){}
+//	bool run(void *p){
+//		while(1){
+//			//if done flag for channel 3 is set
+//					if(LPC_ADC->ADSTAT & (1 << 3)){
+//						//12 bits of data
+//						char data = LPC_ADC->ADDR3;
+//						//puts("Inside data loop\n");
+//						printf("Data: %x\n", data);
+//						//vTaskDelay(1);
+//					}
+//		}
+//
+//		return true;
+//	}
+//	bool init(void){
+//		//set bit 12 of PCONP
+//		LPC_SC->PCONP |= (1 << 12);
+//		//peripheral clock select
+//		LPC_SC->PCLKSEL0 &= ~(3 << 24); //clear
+//		LPC_SC->PCLKSEL0 |= (1 << 24); //set to CCLK/1
+//
+//		//disable pull-up and pull-down resistors
+//		LPC_PINCON->PINMODE1 &= ~(3 << 20); //clear
+//		LPC_PINCON->PINMODE1 |= (0x2 << 20); //set to 10 to disable pull-up and pull-down
+//		//set pin functionality in PINSEL
+//		//select P0.26(AD0.3) as 01 functionality or AD0.3
+//		LPC_PINCON->PINSEL1 &= ~(3 << 20); //clear
+//		LPC_PINCON->PINSEL1 |= (1 << 20); //set to 01
+//
+//		//disable interrupts on channel 3 for hardware scan mode
+//		LPC_ADC->ADINTEN &= ~(1 << 3); //clear bit 3
+//		//need to set AD control register
+//		//select all 8 AD pins so hardware scan mode works better
+//		//burst(bit 16) should be set for hardware scan mode
+//		//PDN (bit 21) should be set to enable ADC
+//		//START (bits 24-27 must be 0s because BURST bit is set)
+//		//0000 0000 0010 0001 0000 0000 1111 1111
+//		//select all ad pins 0x2100FF
+//		LPC_ADC->ADCR |= ((1 << 3) | (1 << 16) | (1 << 21));
+//		LPC_ADC->ADCR &= ~(7 << 24); //clear start bits
+//		//LPC_ADC->ADCR = 0x002100FF;
+//
+//		return true;
+//	}
+//
+//};
+
+
+
 int main(void)
 {
     /**
@@ -56,6 +177,7 @@ int main(void)
 
     /* Consumes very little CPU, but need highest priority to handle mesh network ACKs */
     scheduler_add_task(new wirelessTask(PRIORITY_CRITICAL));
+    scheduler_add_task(new flame_task(PRIORITY_HIGH));
 
     /* Change "#if 0" to "#if 1" to run period tasks; @see period_callbacks.cpp */
     #if 0
